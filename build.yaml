@@ -123,7 +123,7 @@ docker:
       QEMU_ARCH: aarch64
       TARGET_ARCH: arm64/v8
   dockerfile: docker/Dockerfile
-  imagename: jellyfin/jellyfin
+  imagename: bhoopendrau004/jellyfin
 
 # Nuget packages
 nuget:
