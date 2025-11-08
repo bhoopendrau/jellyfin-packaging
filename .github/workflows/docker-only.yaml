@@ -1,0 +1,47 @@
+name: "Docker Only Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
+        description: 'The server and web stable release tag (i.e. "vX.Y.Z")'
+
+env:
+  SDK_VERSION: "9.0.x"
+
+permissions:
+  contents: read
+
+jobs:
+  Docker:
+    runs-on: ubuntu-24.04
+    continue-on-error: false
+    steps:
+      - name: "Set dated version for unstable builds"
+        id: version
+        run: |-
+          echo "JELLYFIN_VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+          echo "JELLYFIN_RELEASE_TYPE=stable" >> $GITHUB_ENV
+
+      - name: "Install dependencies"
+        run: |-
+          sudo apt-get update
+          sudo apt-get install --yes python3-git python3-yaml
+
+      - name: "Checkout repository"
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: "Prepare repository"
+        run: |-
+          ./checkout.py ${{ inputs.version || 'master' }}
+
+      - name: "Run builder for Docker containers"
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |-
+          sudo --preserve-env ./build.py ${{ env.JELLYFIN_VERSION }} docker ${{ env.DEBUG_FLAG }}
