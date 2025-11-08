@@ -3,20 +3,20 @@ ARG DOTNET_VERSION=8.0
 ARG NODEJS_VERSION=20
 
 # Combined image version (Debian)
-ARG OS_VERSION=bookworm
+ARG OS_VERSION=trixie
 
 # Jellyfin FFMPEG package
 ARG FFMPEG_PACKAGE=jellyfin-ffmpeg7
 
 # https://github.com/intel/compute-runtime/releases
-ARG GMMLIB_VER=22.7.0
+ARG GMMLIB_VER=22.8.1
 # >= Gen12 graphics (current)
-ARG IGC2_VER=2.10.8
-ARG IGC2_BUILD=18926
-ARG NEO_VER=25.13.33276.16
+ARG IGC2_VER=2.18.5
+ARG IGC2_BUILD=19820
+ARG NEO_VER=25.35.35096.9
 # <= Gen11 graphics (legacy)
-ARG IGC1_LEGACY_VER=1.0.17537.20
-ARG NEO_LEGACY_VER=24.35.30872.22
+ARG IGC1_LEGACY_VER=1.0.17537.24
+ARG NEO_LEGACY_VER=24.35.30872.36
 
 # https://github.com/tsukumijima/libmali-rockchip
 ARG MALI_PKG_VER=1.9-1_arm64
@@ -27,8 +27,6 @@ ARG MALI_PKG_CFG=valhall-g610-g24p0-gbm
 ARG PACKAGE_ARCH
 # Dotnet architeture (x64, arm64, arm), set by build script
 ARG DOTNET_ARCH
-# QEMU architecture (x86_64, aarch64, arm), set by build script
-ARG QEMU_ARCH
 # Base Image architecture (amd64, arm64v8, arm32v7), set by build script
 ARG IMAGE_ARCH
 # Target platform architecture (amd64, arm64/v8, arm/v7), set by build script
@@ -40,7 +38,7 @@ ARG JELLYFIN_VERSION
 #
 # Build the web artifacts
 #
-FROM node:${NODEJS_VERSION}-alpine as web
+FROM node:${NODEJS_VERSION}-alpine AS web
 
 ARG SOURCE_DIR=/src
 ARG ARTIFACT_DIR=/web
@@ -74,9 +72,10 @@ RUN npm ci --no-audit --unsafe-perm \
 #
 # Build the server artifacts
 #
-FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-${OS_VERSION}-slim as server
+FROM debian:${OS_VERSION}-slim AS server
 
 ARG DOTNET_ARCH
+ARG DOTNET_VERSION
 
 ARG SOURCE_DIR=/src
 ARG ARTIFACT_DIR=/server
@@ -88,6 +87,13 @@ WORKDIR ${SOURCE_DIR}
 COPY jellyfin-server .
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 
+RUN apt-get update \
+ && apt-get install --no-install-recommends --no-install-suggests --yes \
+    curl \
+    ca-certificates \
+    libicu76 \
+ && curl -fsSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel ${DOTNET_VERSION} --install-dir /usr/local/bin
+
 RUN dotnet publish Jellyfin.Server --arch ${DOTNET_ARCH} --configuration ${CONFIG} \
     --output="${ARTIFACT_DIR}" --self-contained \
     -p:DebugSymbols=false -p:DebugType=none
@@ -95,8 +101,7 @@ RUN dotnet publish Jellyfin.Server --arch ${DOTNET_ARCH} --configuration ${CONFI
 #
 # Build the final combined image
 #
-FROM multiarch/qemu-user-static:x86_64-${QEMU_ARCH} as qemu
-FROM --platform=linux/${TARGET_ARCH} ${IMAGE_ARCH}/debian:${OS_VERSION}-slim as combined
+FROM --platform=linux/${TARGET_ARCH} ${IMAGE_ARCH}/debian:${OS_VERSION}-slim AS combined
 
 ARG OS_VERSION
 ARG FFMPEG_PACKAGE
@@ -113,11 +118,6 @@ ARG MALI_PKG_TAG
 ARG MALI_PKG_CFG
 
 ARG PACKAGE_ARCH
-ARG DOTNET_ARCH
-ARG QEMU_ARCH
-
-# Copy the QEMU runtime
-COPY --from=qemu /usr/bin/* /usr/bin
 
 # Set the health URL
 ENV HEALTHCHECK_URL=http://localhost:8096/health
@@ -150,15 +150,23 @@ RUN apt-get update \
     ca-certificates \
     gnupg \
     curl \
-    apt-transport-https \
  && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key \
-  | gpg --dearmor -o /etc/apt/trusted.gpg.d/debian-jellyfin.gpg \
- && echo "deb [arch=${PACKAGE_ARCH}] https://repo.jellyfin.org/master/debian ${OS_VERSION} main" > /etc/apt/sources.list.d/jellyfin.list \
- && apt-get update \
+  | gpg --dearmor -o /etc/apt/keyrings/jellyfin.gpg \
+ && cat <<EOF > /etc/apt/sources.list.d/jellyfin.sources
+Types: deb
+URIs: https://repo.jellyfin.org/debian
+Suites: ${OS_VERSION}
+Components: main
+Architectures: ${PACKAGE_ARCH}
+Signed-By: /etc/apt/keyrings/jellyfin.gpg
+EOF
+
+RUN apt-get update \
  && apt-get install --no-install-recommends --no-install-suggests --yes \
     ${FFMPEG_PACKAGE} \
     openssl \
     locales \
+    libicu76 \
     libfontconfig1 \
     libfreetype6 \
     libjemalloc2 \
@@ -175,7 +183,7 @@ RUN if test "${PACKAGE_ARCH}" = "amd64"; then \
  && curl -LO https://github.com/intel/compute-runtime/releases/download/${NEO_VER}/libigdgmm12_${GMMLIB_VER}_amd64.deb \
          -LO https://github.com/intel/intel-graphics-compiler/releases/download/v${IGC2_VER}/intel-igc-core-2_${IGC2_VER}+${IGC2_BUILD}_amd64.deb \
          -LO https://github.com/intel/intel-graphics-compiler/releases/download/v${IGC2_VER}/intel-igc-opencl-2_${IGC2_VER}+${IGC2_BUILD}_amd64.deb \
-         -LO https://github.com/intel/compute-runtime/releases/download/${NEO_VER}/intel-opencl-icd_${NEO_VER}_amd64.deb \
+         -LO https://github.com/intel/compute-runtime/releases/download/${NEO_VER}/intel-opencl-icd_${NEO_VER}-0_amd64.deb \
          -LO https://github.com/intel/intel-graphics-compiler/releases/download/igc-${IGC1_LEGACY_VER}/intel-igc-core_${IGC1_LEGACY_VER}_amd64.deb \
          -LO https://github.com/intel/intel-graphics-compiler/releases/download/igc-${IGC1_LEGACY_VER}/intel-igc-opencl_${IGC1_LEGACY_VER}_amd64.deb \
          -LO https://github.com/intel/compute-runtime/releases/download/${NEO_LEGACY_VER}/intel-opencl-icd-legacy1_${NEO_LEGACY_VER}_amd64.deb \
@@ -198,6 +206,21 @@ RUN if test "${PACKAGE_ARCH}" = "arm64"; then \
  ; fi \
  && apt-get clean autoclean --yes \
  && apt-get autoremove --yes \
+ && rm -rf /var/cache/apt/archives* /var/lib/apt/lists/*
+
+# Add fonts for east asian languages rendering
+RUN apt update --yes \
+ && apt install --no-install-recommends --no-install-suggests --yes \
+        fonts-wqy-zenhei \
+        fonts-wqy-microhei \
+        fonts-arphic-ukai \
+        fonts-arphic-uming \
+        fonts-noto-cjk \
+        fonts-ipafont-mincho \
+        fonts-ipafont-gothic \
+        fonts-unfonts-core \
+ && apt clean autoclean --yes \
+ && apt autoremove --yes \
  && rm -rf /var/cache/apt/archives* /var/lib/apt/lists/*
 
 # Setup jemalloc: link the library to a path owned by us to handle arch specific library paths
@@ -226,7 +249,6 @@ RUN mkdir -p ${JELLYFIN_DATA_DIR} ${JELLYFIN_CACHE_DIR} \
 
 COPY --from=server /server /jellyfin
 COPY --from=web /web /jellyfin/jellyfin-web
-
 ARG JELLYFIN_VERSION
 LABEL "org.opencontainers.image.source"="https://github.com/jellyfin/jellyfin-packaging"
 LABEL "org.opencontainers.image.title"="Jellyfin"
